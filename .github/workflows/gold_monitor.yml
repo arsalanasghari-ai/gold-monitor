@@ -1,0 +1,51 @@
+name: Gold Price Monitor
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # هر ساعت یکبار اجرا میشه
+  workflow_dispatch:       # امکان اجرای دستی هم هست
+
+jobs:
+  check-gold:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Load last price file
+        run: |
+          # اگر فایل قیمت قبلی در cache بود، بازیابیش کن
+          if [ -f "last_price.json" ]; then
+            echo "فایل قیمت قبلی پیدا شد"
+          else
+            echo "اولین اجرا"
+          fi
+
+      - name: Run gold monitor
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python gold_monitor.py
+
+      - name: Save price file
+        uses: actions/upload-artifact@v3
+        with:
+          name: last-price
+          path: last_price.json
+          retention-days: 1
+
+      - name: Download previous price
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+        with:
+          name: last-price
