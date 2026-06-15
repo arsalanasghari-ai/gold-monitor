@@ -20,10 +20,12 @@ RSS_FEEDS = [
 ]
 
 KEYWORDS = [
-    "federal reserve", "fed rate", "interest rate",
-    "oil price", "crude oil", "opec",
-    "gold price", "inflation", "cpi",
-    "recession", "gdp", "dollar"
+    "federal reserve", "fed", "interest rate", "rate hike", "rate cut",
+    "oil", "crude", "opec", "brent", "wti",
+    "gold", "inflation", "cpi", "pce",
+    "recession", "gdp", "dollar", "treasury",
+    "market", "stock", "economy", "economic",
+    "bank", "debt", "bond", "yield"
 ]
 
 def get_gold_price():
