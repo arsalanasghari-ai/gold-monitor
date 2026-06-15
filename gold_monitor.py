@@ -1,26 +1,29 @@
 import requests
 import json
 import os
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 GOLDAPI_KEY = os.environ.get("GOLDAPI_KEY", "")
-NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY", "")
 PRICE_FILE = "last_price.json"
 NEWS_FILE = "last_news.json"
 THRESHOLD = 2.0
 
-# کلمات کلیدی اخبار مهم اقتصادی
+# RSS فیدهای معتبر اقتصادی
+RSS_FEEDS = [
+    "https://feeds.reuters.com/reuters/businessNews",
+    "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.investing.com/rss/news_25.rss",
+]
+
 KEYWORDS = [
-    "federal reserve", "Fed rate", "interest rate",
-    "oil price", "crude oil", "OPEC",
-    "gold price", "XAU",
-    "inflation", "CPI",
-    "dollar", "USD",
-    "recession", "GDP",
-    "Iran sanctions"
+    "federal reserve", "fed rate", "interest rate",
+    "oil price", "crude oil", "opec",
+    "gold price", "inflation", "cpi",
+    "recession", "gdp", "dollar"
 ]
 
 def get_gold_price():
@@ -28,49 +31,47 @@ def get_gold_price():
         headers = {"x-access-token": GOLDAPI_KEY}
         r = requests.get("https://www.goldapi.io/api/XAU/IRR", headers=headers, timeout=15)
         data = r.json()
-        price_gram_24k = float(data.get('price_gram_24k', 0))
-        price_18k = price_gram_24k * 0.75
+        price_18k = float(data.get('price_gram_24k', 0)) * 0.75
         if 50_000_000 < price_18k < 600_000_000:
             return int(price_18k)
     except Exception as e:
-        print(f"خطا قیمت طلا: {e}")
+        print(f"خطا طلا: {e}")
     return None
 
-def get_important_news():
-    try:
-        # جستجوی اخبار اقتصادی مهم
-        query = "federal reserve OR oil price OR gold price OR inflation OR OPEC OR recession"
-        yesterday = (datetime.now() - timedelta(hours=6)).strftime('%Y-%m-%dT%H:%M:%S')
-        
-        r = requests.get(
-            "https://newsapi.org/v2/everything",
-            params={
-                "q": query,
-                "language": "en",
-                "sortBy": "publishedAt",
-                "from": yesterday,
-                "pageSize": 10,
-                "apiKey": NEWSAPI_KEY
-            },
-            timeout=15
-        )
-        data = r.json()
-        print(f"NewsAPI status: {data.get('status')} | تعداد: {data.get('totalResults', 0)}")
-        
-        articles = data.get('articles', [])
-        if not articles:
-            return None
-            
-        # ساخت لیست عناوین
-        titles = [f"- {a['title']}" for a in articles[:5]]
-        return "\n".join(titles)
-        
-    except Exception as e:
-        print(f"خطا اخبار: {e}")
-    return None
+def get_news_from_rss():
+    """خواندن اخبار از RSS بدون نیاز به API key"""
+    important_titles = []
+    six_hours_ago = datetime.now() - timedelta(hours=6)
 
-def summarize_with_claude(news_text):
+    for feed_url in RSS_FEEDS:
+        try:
+            r = requests.get(
+                feed_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15
+            )
+            root = ET.fromstring(r.content)
+            items = root.findall('.//item')
+            print(f"✅ {feed_url.split('/')[2]}: {len(items)} خبر")
+
+            for item in items[:20]:
+                title = item.findtext('title', '').lower()
+                # فقط اخبار مرتبط با کلمات کلیدی
+                if any(kw in title for kw in KEYWORDS):
+                    original_title = item.findtext('title', '')
+                    important_titles.append(original_title)
+                    print(f"  📌 {original_title}")
+
+        except Exception as e:
+            print(f"خطا RSS {feed_url}: {e}")
+
+    return important_titles
+
+def summarize_with_claude(titles):
+    if not titles or not ANTHROPIC_KEY:
+        return None
     try:
+        news_text = "\n".join([f"- {t}" for t in titles[:10]])
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -80,25 +81,23 @@ def summarize_with_claude(news_text):
             },
             json={
                 "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 200,
+                "max_tokens": 150,
                 "messages": [{
                     "role": "user",
-                    "content": f"""از این اخبار اقتصادی، فقط مهم‌ترین خبر را در یک جمله کوتاه فارسی خلاصه کن.
-فقط اگه خبر واقعاً مهمه (فدرال رزرو، نفت، طلا، تورم، رکود) خلاصه بده.
-اگه خبر مهمی نیست، فقط بنویس: مهم نیست
+                    "content": f"""از این عناوین خبری اقتصادی، مهم‌ترین خبر را در یک جمله کوتاه فارسی بنویس.
+فقط اگه خبر واقعاً مهمه بنویس، وگرنه بنویس: خبر مهمی نیست
 
-اخبار:
+عناوین:
 {news_text}
 
-خلاصه (یک جمله):"""
+خلاصه:"""
                 }]
             },
             timeout=30
         )
-        data = r.json()
-        summary = data['content'][0]['text'].strip()
-        print(f"خلاصه Claude: {summary}")
-        return summary
+        result = r.json()['content'][0]['text'].strip()
+        print(f"Claude: {result}")
+        return result
     except Exception as e:
         print(f"خطا Claude: {e}")
     return None
@@ -111,7 +110,7 @@ def load_last_news():
 
 def save_news(summary):
     with open(NEWS_FILE, "w", encoding="utf-8") as f:
-        json.dump({"last_summary": summary, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f)
+        json.dump({"last_summary": summary, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False)
 
 def load_last_price():
     if os.path.exists(PRICE_FILE):
@@ -137,12 +136,11 @@ def main():
     current_price = get_gold_price()
     if current_price:
         print(f"💰 قیمت: {current_price:,} ریال")
-        last_price, last_date = load_last_price()
-
+        last_price, _ = load_last_price()
         if last_price is None:
             save_price(current_price)
             send_telegram(
-                f"🤖 <b>مانیتور طلا فعال شد!</b>\n\n"
+                f"🤖 <b>مانیتور فعال شد!</b>\n\n"
                 f"💰 طلای ۱۸ عیار: <b>{current_price:,} ریال</b>\n"
                 f"📊 هشدار نوسان بیش از {THRESHOLD}%\n"
                 f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -155,24 +153,30 @@ def main():
                 direction = "رشد" if change_percent > 0 else "ریزش"
                 send_telegram(
                     f"{emoji} <b>هشدار نوسان طلا!</b>\n\n"
-                    f"💰 قیمت فعلی: <b>{current_price:,} ریال</b>\n"
-                    f"💰 قیمت قبلی: <b>{last_price:,} ریال</b>\n"
+                    f"💰 فعلی: <b>{current_price:,} ریال</b>\n"
+                    f"💰 قبلی: <b>{last_price:,} ریال</b>\n"
                     f"📊 {direction}: <b>{abs(change_percent):.2f}%</b>\n"
                     f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 )
             save_price(current_price)
 
     # بخش ۲: اخبار اقتصادی
-    print("\n📰 بررسی اخبار...")
-    news = get_important_news()
-    if news:
-        summary = summarize_with_claude(news)
-        if summary and summary != "مهم نیست" and summary != load_last_news():
-            send_telegram(f"📰 <b>خبر مهم اقتصادی:</b>\n\n{summary}")
-            save_news(summary)
-            print("✅ خبر ارسال شد")
-        else:
-            print("✅ خبر مهمی نیست یا قبلاً ارسال شده")
+    print("\n📰 بررسی اخبار RSS...")
+    titles = get_news_from_rss()
+    print(f"تعداد اخبار مهم: {len(titles)}")
+
+    if titles:
+        summary = summarize_with_claude(titles)
+        if summary and "خبر مهمی نیست" not in summary:
+            last_news = load_last_news()
+            if summary != last_news:
+                send_telegram(f"📰 <b>خبر مهم اقتصادی:</b>\n\n{summary}")
+                save_news(summary)
+                print("✅ خبر ارسال شد")
+            else:
+                print("✅ خبر تکراریه")
+    else:
+        print("✅ خبر مهمی نیست")
 
 if __name__ == "__main__":
     main()
