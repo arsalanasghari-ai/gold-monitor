@@ -83,7 +83,7 @@ def summarize_with_claude(titles):
             },
             json={
                 "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 150,
+                "max_tokens": 200,
                 "messages": [{
                     "role": "user",
                     "content": f"""از این عناوین خبری اقتصادی، مهم‌ترین خبر را در یک جمله کوتاه فارسی بنویس.
@@ -92,18 +92,24 @@ def summarize_with_claude(titles):
 عناوین:
 {news_text}
 
-خلاصه:"""
+خلاصه فارسی (فقط یک جمله):"""
                 }]
             },
             timeout=30
         )
-        result = r.json()['content'][0]['text'].strip()
-        print(f"Claude: {result}")
-        return result
+        print(f"Claude status: {r.status_code}")
+        data = r.json()
+        print(f"Claude response: {data}")
+        
+        if 'content' in data and len(data['content']) > 0:
+            result = data['content'][0]['text'].strip()
+            print(f"خلاصه: {result}")
+            return result
+        elif 'error' in data:
+            print(f"Claude error: {data['error']}")
     except Exception as e:
         print(f"خطا Claude: {e}")
     return None
-
 def load_last_news():
     if os.path.exists(NEWS_FILE):
         with open(NEWS_FILE, "r", encoding="utf-8") as f:
