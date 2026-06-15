@@ -8,71 +8,73 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 PRICE_FILE = "last_price.json"
 THRESHOLD = 2.0
 
-def get_gold_price():
-    """
-    قیمت طلای ۱۸ عیار را محاسبه میکنه:
-    قیمت اونس جهانی (دلار) × نرخ دلار (ریال) × 0.5833 / 31.1035
-    """
+def get_xau_price_usd():
+    """قیمت اونس طلا به دلار"""
+
+    # روش اول: gold-api.com (رایگان، بدون key)
     try:
-        # قیمت اونس طلا از frankfurter (رایگان و بدون نیاز به key)
-        r1 = requests.get(
-            "https://api.frankfurter.app/latest?from=XAU&to=USD",
+        r = requests.get(
+            "https://gold-api.com/price/XAU",
+            headers={"User-Agent": "Mozilla/5.0"},
             timeout=15
         )
-        data1 = r1.json()
-        print(f"Frankfurter: {data1}")
-        # این قیمت XAU/USD هست، باید برعکس کنیم
-        usd_per_xau = 1 / data1['rates']['USD']  # اشتباه، درستش اینه:
-        xau_price_usd = 1 / data1['rates']['USD']
+        print(f"gold-api: {r.text[:200]}")
+        data = r.json()
+        price = float(data.get('price', 0))
+        if 1000 < price < 10000:
+            print(f"✅ اونس طلا: ${price}")
+            return price
     except Exception as e:
-        print(f"خطا frankfurter: {e}")
-        # قیمت ثابت پشتیبان (تقریبی)
-        xau_price_usd = 3300
+        print(f"خطا gold-api: {e}")
 
+    # روش دوم: freegoldapi.com (CSV)
     try:
-        # نرخ دلار به ریال از exchangerate-api (رایگان)
-        r2 = requests.get(
+        r = requests.get(
+            "https://freegoldapi.com/data/latest.csv",
+            timeout=15
+        )
+        lines = r.text.strip().split('\n')
+        last_line = lines[-1]
+        price = float(last_line.split(',')[1])
+        if 1000 < price < 10000:
+            print(f"✅ اونس طلا (freegoldapi): ${price}")
+            return price
+    except Exception as e:
+        print(f"خطا freegoldapi: {e}")
+
+    # روش سوم: مقدار ثابت تقریبی
+    print("⚠️ استفاده از قیمت پیش‌فرض اونس: $3300")
+    return 3300.0
+
+def get_usd_to_rial():
+    """نرخ دلار به ریال"""
+    try:
+        r = requests.get(
             "https://open.er-api.com/v6/latest/USD",
             timeout=15
         )
-        data2 = r2.json()
-        usd_to_rial = data2['rates'].get('IRR', 0)
-        print(f"USD/IRR: {usd_to_rial}")
-
-        if not usd_to_rial or usd_to_rial < 100000:
-            # نرخ دلار آزاد ایران (تقریبی اگه API نداد)
-            usd_to_rial = 1700000  # تقریبی
-            print(f"استفاده از نرخ پیش‌فرض: {usd_to_rial}")
-
+        data = r.json()
+        rate = data['rates'].get('IRR', 0)
+        if rate > 100000:
+            print(f"✅ نرخ دلار: {rate:,.0f} ریال")
+            return rate
     except Exception as e:
         print(f"خطا exchange rate: {e}")
-        usd_to_rial = 1700000
+    
+    print("⚠️ استفاده از نرخ پیش‌فرض دلار: 900,000 ریال")
+    return 900000.0
 
-    try:
-        # قیمت اونس از metalpriceapi (رایگان)
-        r3 = requests.get(
-            "https://api.metalpriceapi.com/v1/latest?api_key=free&base=USD&currencies=XAU",
-            timeout=15
-        )
-        data3 = r3.json()
-        print(f"MetalPrice: {data3}")
-        if 'rates' in data3 and 'USDXAU' in data3['rates']:
-            xau_price_usd = 1 / data3['rates']['USDXAU']
-    except Exception as e:
-        print(f"خطا metalpriceapi: {e}")
-
-    # محاسبه قیمت طلای ۱۸ عیار به ریال
-    # هر اونس = 31.1035 گرم
-    # طلای ۱۸ عیار = 75% طلا (18/24 = 0.75)
-    # قیمت هر گرم طلای ۱۸ عیار = (قیمت اونس × نرخ دلار × 0.75) / 31.1035
-    price_per_gram_18k = (xau_price_usd * usd_to_rial * 0.75) / 31.1035
-
-    print(f"اونس: ${xau_price_usd:.2f} | دلار: {usd_to_rial:,} ریال")
-    print(f"قیمت محاسبه‌شده هر گرم ۱۸ عیار: {price_per_gram_18k:,.0f} ریال")
-
-    if 50_000_000 < price_per_gram_18k < 600_000_000:
-        return int(price_per_gram_18k)
-
+def get_gold_price():
+    """قیمت طلای ۱۸ عیار به ریال"""
+    xau_usd = get_xau_price_usd()
+    usd_rial = get_usd_to_rial()
+    
+    # هر گرم طلای ۱۸ عیار = (اونس × نرخ دلار × 0.75) / 31.1035
+    price = (xau_usd * usd_rial * 0.75) / 31.1035
+    print(f"📊 اونس: ${xau_usd} | دلار: {usd_rial:,.0f} | گرم ۱۸ عیار: {price:,.0f} ریال")
+    
+    if 50_000_000 < price < 600_000_000:
+        return int(price)
     return None
 
 def load_last_price():
@@ -102,7 +104,7 @@ def main():
         send_telegram("⚠️ خطا در دریافت قیمت طلا")
         return
 
-    print(f"💰 قیمت: {current_price:,} ریال")
+    print(f"💰 قیمت نهایی: {current_price:,} ریال")
     last_price, last_date = load_last_price()
 
     if last_price is None:
