@@ -70,47 +70,37 @@ def get_news_from_rss():
     return important_titles
 
 def summarize_with_claude(titles):
-    if not titles or not ANTHROPIC_KEY:
+    """ترجمه با LibreTranslate (رایگان و بدون key)"""
+    if not titles:
         return None
     try:
-        news_text = "\n".join([f"- {t}" for t in titles[:10]])
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 200,
-                "messages": [{
-                    "role": "user",
-                    "content": f"""از این عناوین خبری اقتصادی، مهم‌ترین خبر را در یک جمله کوتاه فارسی بنویس.
-فقط اگه خبر واقعاً مهمه بنویس، وگرنه بنویس: خبر مهمی نیست
-
-عناوین:
-{news_text}
-
-خلاصه فارسی (فقط یک جمله):"""
-                }]
-            },
-            timeout=30
-        )
-        print(f"Claude status: {r.status_code}")
-        data = r.json()
-        print(f"Claude response: {data}")
+        # مهم‌ترین عنوان رو انتخاب کن
+        best_title = titles[0]
         
-        if 'content' in data and len(data['content']) > 0:
-            result = data['content'][0]['text'].strip()
-            print(f"خلاصه: {result}")
-            return result
-        elif 'error' in data:
-            print(f"Claude error: {data['error']}")
+        # ترجمه با LibreTranslate
+        r = requests.post(
+            "https://libretranslate.com/translate",
+            json={
+                "q": best_title,
+                "source": "en",
+                "target": "fa",
+                "format": "text"
+            },
+            timeout=15
+        )
+        data = r.json()
+        print(f"ترجمه: {data}")
+        
+        if 'translatedText' in data:
+            return data['translatedText']
+            
     except Exception as e:
-        print(f"خطا Claude: {e}")
-    return None
-def load_last_news():
+        print(f"خطا ترجمه: {e}")
+    
+    # اگه ترجمه نشد، عنوان انگلیسی رو بفرست
+    return f"📌 {titles[0]}"
+    
+    def load_last_news():
     if os.path.exists(NEWS_FILE):
         with open(NEWS_FILE, "r", encoding="utf-8") as f:
             return json.load(f).get("last_summary", "")
