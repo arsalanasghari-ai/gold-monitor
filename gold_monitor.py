@@ -1,5 +1,4 @@
 import requests
-import re
 import json
 import os
 from datetime import datetime
@@ -10,57 +9,44 @@ PRICE_FILE = "last_price.json"
 THRESHOLD = 2.0
 
 def get_gold_price():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "fa,en;q=0.9",
-        "Referer": "https://www.tgju.org/"
-    }
-
-    # روش اول: scraping صفحه tgju
+    """دریافت قیمت طلای ۱۸ عیار از BrsApi"""
     try:
-        url = "https://www.tgju.org/profile/geram18"
+        # API key آزمایشی رایگان
+        api_key = "FreeSV0E1LSgB9RDjuf0QorSLViX8pPG"
+        url = f"https://Api.BrsApi.ir/Market/Gold_Currency.php?key={api_key}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*"
+        }
         r = requests.get(url, headers=headers, timeout=15)
-        text = r.text
-
-        # الگوی اصلی
-        match = re.search(
-            r'در حال حاضر قیمت هر طلای 18 عیار[^\d]+([\d,٬]+)\s*ریال',
-            text
-        )
-        if match:
-            price_str = match.group(1).replace(',', '').replace('٬', '')
-            price = int(price_str)
-            if 50_000_000 < price < 600_000_000:
-                print(f"✅ قیمت پیدا شد: {price:,} ریال")
-                return price
-
-        # الگوی دوم: همه اعداد بین 50 تا 600 میلیون
-        all_numbers = re.findall(r'(1[0-9]{8})', text)
-        print(f"اعداد پیدا شده: {all_numbers[:5]}")
-        for num in all_numbers:
-            price = int(num)
-            if 50_000_000 < price < 600_000_000:
-                print(f"✅ قیمت (روش دوم): {price:,} ریال")
-                return price
-
-    except Exception as e:
-        print(f"خطا روش اول: {e}")
-
-    # روش دوم: navasan API
-    try:
-        r = requests.get(
-            "https://api.navasan.tech/latest/?api_key=free&item=gold18",
-            timeout=15
-        )
-        print(f"Navasan: {r.text[:200]}")
+        print(f"Status: {r.status_code}")
+        print(f"Response: {r.text[:300]}")
+        
         data = r.json()
-        if isinstance(data, list) and len(data) > 0:
-            price = int(str(data[0].get('value', 0)).replace(',', ''))
-            if 50_000_000 < price < 600_000_000:
-                return price
-    except Exception as e:
-        print(f"خطا Navasan: {e}")
+        
+        # پیدا کردن طلای ۱۸ عیار در response
+        if isinstance(data, list):
+            for item in data:
+                name = str(item.get('name', '') or item.get('title', ''))
+                if '18' in name or 'geram18' in str(item).lower():
+                    price_str = str(item.get('price', '') or item.get('value', '')).replace(',', '')
+                    if price_str.isdigit():
+                        price = int(price_str)
+                        if 50_000_000 < price < 600_000_000:
+                            print(f"✅ قیمت: {price:,} ریال - {name}")
+                            return price
+        elif isinstance(data, dict):
+            # شاید کلید مستقیم داشته باشه
+            for key, val in data.items():
+                if '18' in str(key):
+                    price_str = str(val).replace(',', '')
+                    if price_str.isdigit():
+                        price = int(price_str)
+                        if 50_000_000 < price < 600_000_000:
+                            return price
 
+    except Exception as e:
+        print(f"خطا BrsApi: {e}")
     return None
 
 def load_last_price():
@@ -87,7 +73,7 @@ def main():
 
     if not current_price:
         print("❌ خطا در دریافت قیمت")
-        send_telegram("⚠️ خطا در دریافت قیمت طلا از tgju.org")
+        send_telegram("⚠️ خطا در دریافت قیمت طلا")
         return
 
     print(f"💰 قیمت: {current_price:,} ریال")
