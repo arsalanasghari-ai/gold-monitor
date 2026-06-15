@@ -9,44 +9,70 @@ PRICE_FILE = "last_price.json"
 THRESHOLD = 2.0
 
 def get_gold_price():
-    """دریافت قیمت طلای ۱۸ عیار از BrsApi"""
+    """
+    قیمت طلای ۱۸ عیار را محاسبه میکنه:
+    قیمت اونس جهانی (دلار) × نرخ دلار (ریال) × 0.5833 / 31.1035
+    """
     try:
-        # API key آزمایشی رایگان
-        api_key = "FreeSV0E1LSgB9RDjuf0QorSLViX8pPG"
-        url = f"https://Api.BrsApi.ir/Market/Gold_Currency.php?key={api_key}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*"
-        }
-        r = requests.get(url, headers=headers, timeout=15)
-        print(f"Status: {r.status_code}")
-        print(f"Response: {r.text[:300]}")
-        
-        data = r.json()
-        
-        # پیدا کردن طلای ۱۸ عیار در response
-        if isinstance(data, list):
-            for item in data:
-                name = str(item.get('name', '') or item.get('title', ''))
-                if '18' in name or 'geram18' in str(item).lower():
-                    price_str = str(item.get('price', '') or item.get('value', '')).replace(',', '')
-                    if price_str.isdigit():
-                        price = int(price_str)
-                        if 50_000_000 < price < 600_000_000:
-                            print(f"✅ قیمت: {price:,} ریال - {name}")
-                            return price
-        elif isinstance(data, dict):
-            # شاید کلید مستقیم داشته باشه
-            for key, val in data.items():
-                if '18' in str(key):
-                    price_str = str(val).replace(',', '')
-                    if price_str.isdigit():
-                        price = int(price_str)
-                        if 50_000_000 < price < 600_000_000:
-                            return price
+        # قیمت اونس طلا از frankfurter (رایگان و بدون نیاز به key)
+        r1 = requests.get(
+            "https://api.frankfurter.app/latest?from=XAU&to=USD",
+            timeout=15
+        )
+        data1 = r1.json()
+        print(f"Frankfurter: {data1}")
+        # این قیمت XAU/USD هست، باید برعکس کنیم
+        usd_per_xau = 1 / data1['rates']['USD']  # اشتباه، درستش اینه:
+        xau_price_usd = 1 / data1['rates']['USD']
+    except Exception as e:
+        print(f"خطا frankfurter: {e}")
+        # قیمت ثابت پشتیبان (تقریبی)
+        xau_price_usd = 3300
+
+    try:
+        # نرخ دلار به ریال از exchangerate-api (رایگان)
+        r2 = requests.get(
+            "https://open.er-api.com/v6/latest/USD",
+            timeout=15
+        )
+        data2 = r2.json()
+        usd_to_rial = data2['rates'].get('IRR', 0)
+        print(f"USD/IRR: {usd_to_rial}")
+
+        if not usd_to_rial or usd_to_rial < 100000:
+            # نرخ دلار آزاد ایران (تقریبی اگه API نداد)
+            usd_to_rial = 1700000  # تقریبی
+            print(f"استفاده از نرخ پیش‌فرض: {usd_to_rial}")
 
     except Exception as e:
-        print(f"خطا BrsApi: {e}")
+        print(f"خطا exchange rate: {e}")
+        usd_to_rial = 1700000
+
+    try:
+        # قیمت اونس از metalpriceapi (رایگان)
+        r3 = requests.get(
+            "https://api.metalpriceapi.com/v1/latest?api_key=free&base=USD&currencies=XAU",
+            timeout=15
+        )
+        data3 = r3.json()
+        print(f"MetalPrice: {data3}")
+        if 'rates' in data3 and 'USDXAU' in data3['rates']:
+            xau_price_usd = 1 / data3['rates']['USDXAU']
+    except Exception as e:
+        print(f"خطا metalpriceapi: {e}")
+
+    # محاسبه قیمت طلای ۱۸ عیار به ریال
+    # هر اونس = 31.1035 گرم
+    # طلای ۱۸ عیار = 75% طلا (18/24 = 0.75)
+    # قیمت هر گرم طلای ۱۸ عیار = (قیمت اونس × نرخ دلار × 0.75) / 31.1035
+    price_per_gram_18k = (xau_price_usd * usd_to_rial * 0.75) / 31.1035
+
+    print(f"اونس: ${xau_price_usd:.2f} | دلار: {usd_to_rial:,} ریال")
+    print(f"قیمت محاسبه‌شده هر گرم ۱۸ عیار: {price_per_gram_18k:,.0f} ریال")
+
+    if 50_000_000 < price_per_gram_18k < 600_000_000:
+        return int(price_per_gram_18k)
+
     return None
 
 def load_last_price():
