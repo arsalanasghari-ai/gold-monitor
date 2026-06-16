@@ -2,7 +2,8 @@ name: Gold Price Monitor
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0 * * * *'       # هر ساعت یکبار (بررسی قیمت + اخبار)
+    - cron: '30 16 * * *'     # ساعت ۲۰:۰۰ به وقت تهران (16:30 UTC) -> گزارش روزانه
   workflow_dispatch:
 
 jobs:
@@ -21,10 +22,21 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      - name: Determine run mode
+        id: mode
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+          if [ "$HOUR" = "16" ] && [ "$MIN" = "30" ]; then
+            echo "mode=daily_report" >> $GITHUB_OUTPUT
+          else
+            echo "mode=hourly" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run gold monitor
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
-          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          RUN_MODE: ${{ steps.mode.outputs.mode }}
         run: python gold_monitor.py
