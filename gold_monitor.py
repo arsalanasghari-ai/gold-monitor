@@ -54,8 +54,24 @@ def get_news_from_rss():
         except Exception as e:
             print(f"خطا RSS {feed_url}: {e}")
     return important_titles
-
+    
 def translate_title(title):
+    # روش اول: MyMemory (رایگان، بدون نیاز به key)
+    try:
+        r = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": title, "langpair": "en|fa"},
+            timeout=15
+        )
+        data = r.json()
+        print(f"MyMemory: {data.get('responseStatus')}")
+        translated = data.get('responseData', {}).get('translatedText', '')
+        if translated and translated.lower() != title.lower():
+            return translated
+    except Exception as e:
+        print(f"خطا MyMemory: {e}")
+
+    # روش دوم: LibreTranslate (پشتیبان)
     try:
         r = requests.post(
             "https://libretranslate.com/translate",
@@ -63,11 +79,13 @@ def translate_title(title):
             timeout=15
         )
         data = r.json()
-        print(f"ترجمه: {data}")
+        print(f"LibreTranslate: {data}")
         if 'translatedText' in data:
             return data['translatedText']
     except Exception as e:
-        print(f"خطا ترجمه: {e}")
+        print(f"خطا LibreTranslate: {e}")
+
+    # اگه هیچی جواب نداد
     return f"📌 {title}"
 
 def load_last_news():
