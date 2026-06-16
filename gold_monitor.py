@@ -83,9 +83,9 @@ def get_all_prices():
     btc_usd, usdt_usd = get_crypto_prices_usd()
 
     if btc_usd:
-        prices['bitcoin'] = int(btc_usd * usd_rial)  # ریال
+        prices['bitcoin'] = round(btc_usd, 2)  # دلار
     if usdt_usd:
-        prices['tether'] = int(usdt_usd * usd_rial)  # ریال
+        prices['tether'] = int(usdt_usd * usd_rial)  # ریال (تتر تومانی)
 
     return prices
 
@@ -186,6 +186,8 @@ def fa_name(key):
     }.get(key, key)
 
 def fa_unit(key):
+    if key == "bitcoin":
+        return "دلار"
     return "ریال"
 
 # ===================== منطق اصلی هر ساعت =====================
@@ -241,17 +243,27 @@ def check_news():
     titles = get_news_from_rss()
     print(f"تعداد اخبار مهم: {len(titles)}")
 
-    if titles:
-        summary = translate_title(titles[0])
-        last_news = load_last_news()
-        if summary and summary != last_news:
-            send_telegram(f"📰 <b>خبر مهم اقتصادی:</b>\n\n{summary}")
-            save_news(summary)
-            print("✅ خبر ارسال شد")
-        else:
-            print("✅ خبر تکراریه")
-    else:
+    if not titles:
         print("✅ خبر مهمی نیست")
+        return
+
+    last_sent = load_last_news()
+    already_sent = last_sent.split("|||") if last_sent else []
+
+    new_titles = [t for t in titles if t not in already_sent][:3]
+
+    if not new_titles:
+        print("✅ خبرها تکراری بودن")
+        return
+
+    lines = ["📰 <b>اخبار مهم اقتصادی:</b>\n"]
+    for t in new_titles:
+        translated = translate_title(t)
+        lines.append(f"• {translated}")
+
+    send_telegram("\n\n".join(lines))
+    save_news("|||".join(titles[:10]))  # ذخیره ۱۰ خبر اخیر برای جلوگیری از تکرار
+    print(f"✅ {len(new_titles)} خبر ارسال شد")
 
 def send_daily_report():
     """گزارش خلاصه روزانه - بیشترین رشد و کمترین رشد بین دارایی‌ها"""
