@@ -1,17 +1,19 @@
 import requests
+import json
 import os
 import time
-import json
 import xml.etree.ElementTree as ET
-from flask import Flask, request
-
-app = Flask(__name__)
+from datetime import datetime
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
 GOLDAPI_KEY = os.environ.get("GOLDAPI_KEY", "")
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-HISTORY_FILE = "/tmp/price_history.json"
+PRICE_FILE = "last_prices.json"
+NEWS_FILE = "last_news.json"
+HISTORY_FILE = "daily_history.json"
+TREND_FILE = "price_history.json"   # برای استفاده ربات /price روی Render
+THRESHOLD = 2.0
 
 RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -19,8 +21,11 @@ RSS_FEEDS = [
 ]
 KEYWORDS = [
     "federal reserve", "fed", "interest rate", "rate hike", "rate cut",
-    "oil", "crude", "opec", "gold", "inflation", "cpi",
-    "recession", "gdp", "dollar", "bitcoin", "crypto"
+    "oil", "crude", "opec", "brent", "wti",
+    "gold", "inflation", "cpi", "pce",
+    "recession", "gdp", "dollar", "treasury",
+    "market", "stock", "economy", "economic",
+    "bank", "debt", "bond", "yield"
 ]
 
 # ===================== قیمت‌ها =====================
@@ -56,6 +61,7 @@ def get_crypto_prices_usd():
             timeout=15
         )
         data = r.json()
+        print(f"CoinGecko: {data}")
         btc = data.get('bitcoin', {}).get('usd')
         usdt = data.get('tether', {}).get('usd')
         return btc, usdt
@@ -63,160 +69,274 @@ def get_crypto_prices_usd():
         print(f"خطا CoinGecko: {e}")
     return None, None
 
-# ===================== تاریخچه برای محاسبه روند =====================
+def get_all_prices():
+    prices = {}
+    gold = get_gold_price()
+    if gold:
+        prices['gold_18k'] = gold
+
+    usd_rial = get_usd_to_rial()
+    btc_usd, usdt_usd = get_crypto_prices_usd()
+
+    if btc_usd:
+        prices['bitcoin'] = round(btc_usd, 2)  # دلار
+    if usdt_usd:
+        prices['tether'] = int(usdt_usd * usd_rial)  # ریال
+
+    return prices
+
+# ===================== ذخیره/بارگذاری =====================
+
+def load_last_prices():
+    if os.path.exists(PRICE_FILE):
+        with open(PRICE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_prices(prices):
+    data = {**prices, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    with open(PRICE_FILE, "w") as f:
+        json.dump(data, f)
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
     return {}
 
 def save_history(history):
     with open(HISTORY_FILE, "w") as f:
         json.dump(history, f)
 
-def update_and_get_trend(key, current_price):
+def load_last_news():
+    if os.path.exists(NEWS_FILE):
+        with open(NEWS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("last_summary", "")
+    return ""
+
+def save_news(summary):
+    with open(NEWS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"last_summary": summary, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False)
+
+def update_trend_file(current_prices):
     """
-    قیمت فعلی را ذخیره می‌کند و روند را نسبت به ~24 ساعت قبل برمی‌گرداند.
-    خروجی: (درصد تغییر یا None, برچسب روند)
+    فایل price_history.json را آپدیت می‌کند: یک رکورد جدید با timestamp اضافه
+    و رکوردهای قدیمی‌تر از 30 ساعت را حذف می‌کند. این فایل توسط ربات /price
+    روی Render از طریق raw.githubusercontent.com خوانده می‌شود.
     """
-    history = load_history()
     now = time.time()
-    entries = history.get(key, [])
+    trend_data = {}
+    if os.path.exists(TREND_FILE):
+        try:
+            with open(TREND_FILE, "r") as f:
+                trend_data = json.load(f)
+        except Exception:
+            trend_data = {}
 
-    # قیمت قدیمی‌ترین رکورد که حداقل ۲۰ ساعت قبل ثبت شده
-    old_price = None
-    for ts, price in entries:
-        if now - ts >= 20 * 3600:
-            old_price = price
-        else:
-            break
+    for key, price in current_prices.items():
+        entries = trend_data.get(key, [])
+        entries.append([now, price])
+        entries = [e for e in entries if now - e[0] <= 30 * 3600]
+        trend_data[key] = entries
 
-    # رکورد جدید را اضافه کن
-    entries.append([now, current_price])
-    # فقط رکوردهای ۳۰ ساعت اخیر را نگه دار
-    entries = [e for e in entries if now - e[0] <= 30 * 3600]
-    history[key] = entries
-    save_history(history)
-
-    if old_price is None:
-        return None, "داده کافی برای روند ۲۴ ساعته هنوز ثبت نشده"
-
-    change = ((current_price - old_price) / old_price) * 100
-    if change > 1:
-        label = f"📈 روند صعودی (نسبت به دیروز {change:+.2f}%)"
-    elif change < -1:
-        label = f"📉 روند نزولی (نسبت به دیروز {change:+.2f}%)"
-    else:
-        label = f"➡️ روند نسبتاً خنثی ({change:+.2f}%)"
-    return change, label
+    with open(TREND_FILE, "w") as f:
+        json.dump(trend_data, f)
 
 # ===================== اخبار =====================
 
-def get_relevant_news(limit=2):
-    titles = []
+def get_news_from_rss():
+    important_titles = []
     for feed_url in RSS_FEEDS:
         try:
-            r = requests.get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            r = requests.get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
             root = ET.fromstring(r.content)
-            for item in root.findall('.//item')[:15]:
-                title = item.findtext('title', '')
-                if any(kw in title.lower() for kw in KEYWORDS):
-                    titles.append(title)
+            items = root.findall('.//item')
+            print(f"✅ {feed_url.split('/')[2]}: {len(items)} خبر")
+            for item in items[:20]:
+                title = item.findtext('title', '').lower()
+                if any(kw in title for kw in KEYWORDS):
+                    original_title = item.findtext('title', '')
+                    important_titles.append(original_title)
+                    print(f"  📌 {original_title}")
         except Exception as e:
-            print(f"خطا RSS: {e}")
-    return titles[:limit]
+            print(f"خطا RSS {feed_url}: {e}")
+    return important_titles
 
 def translate_title(title):
     try:
         r = requests.get(
             "https://api.mymemory.translated.net/get",
             params={"q": title, "langpair": "en|fa"},
-            timeout=10
+            timeout=15
         )
         data = r.json()
         translated = data.get('responseData', {}).get('translatedText', '')
         if translated and translated.lower() != title.lower():
             return translated
     except Exception as e:
-        print(f"خطا ترجمه: {e}")
-    return title
+        print(f"خطا MyMemory: {e}")
 
-# ===================== ساخت پیام تحلیل =====================
+    try:
+        r = requests.post(
+            "https://libretranslate.com/translate",
+            json={"q": title, "source": "en", "target": "fa", "format": "text"},
+            timeout=15
+        )
+        data = r.json()
+        if 'translatedText' in data:
+            return data['translatedText']
+    except Exception as e:
+        print(f"خطا LibreTranslate: {e}")
 
-def build_price_message():
-    gold = get_gold_price()
-    usd_rial = get_usd_to_rial()
-    btc_usd, usdt_usd = get_crypto_prices_usd()
-
-    lines = ["💰 <b>قیمت لحظه‌ای و تحلیل روند</b>\n"]
-
-    if gold:
-        _, trend = update_and_get_trend("gold", gold)
-        lines.append(f"🟡 <b>طلای ۱۸ عیار:</b> {gold:,} ریال")
-        lines.append(f"   {trend}")
-    else:
-        lines.append("🟡 طلا: دریافت نشد")
-
-    if btc_usd:
-        _, trend = update_and_get_trend("bitcoin", btc_usd)
-        lines.append(f"\n₿ <b>بیت‌کوین:</b> {btc_usd:,.0f} دلار")
-        lines.append(f"   {trend}")
-    else:
-        lines.append("\n₿ بیت‌کوین: دریافت نشد")
-
-    if usdt_usd:
-        tether_rial = int(usdt_usd * usd_rial)
-        _, trend = update_and_get_trend("tether", tether_rial)
-        lines.append(f"\n💵 <b>تتر:</b> {tether_rial:,} ریال")
-        lines.append(f"   {trend}")
-    else:
-        lines.append("\n💵 تتر: دریافت نشد")
-
-    # اخبار مرتبط
-    news = get_relevant_news(limit=2)
-    if news:
-        lines.append("\n\n📰 <b>اخبار مرتبط با بازار:</b>")
-        for n in news:
-            lines.append(f"• {translate_title(n)}")
-
-    lines.append(
-        "\n\n⚠️ <i>این تحلیل صرفاً نشان‌دهنده روند ۲۴ ساعت گذشته است و "
-        "پیش‌بینی قیمت آینده نیست. تصمیم خرید/فروش بر عهده شماست.</i>"
-    )
-    lines.append(f"\n🕐 {time.strftime('%Y-%m-%d %H:%M')}")
-    return "\n".join(lines)
+    return f"📌 {title}"
 
 # ===================== تلگرام =====================
 
-def send_telegram(chat_id, message):
-    url = f"{TELEGRAM_API}/sendMessage"
-    requests.post(url, data={"chat_id": chat_id, "text": message, "parse_mode": "HTML"}, timeout=10)
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+    r = requests.post(url, data=data, timeout=10)
+    print(f"تلگرام: {r.json().get('ok')}")
 
-@app.route("/", methods=["GET"])
-def home():
-    return "Bot is running!", 200
+def fa_name(key):
+    return {
+        "gold_18k": "طلای ۱۸ عیار",
+        "bitcoin": "بیت‌کوین",
+        "tether": "تتر",
+    }.get(key, key)
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    update = request.get_json()
-    print(f"Update: {update}")
+def fa_unit(key):
+    if key == "bitcoin":
+        return "دلار"
+    return "ریال"
 
-    if "message" in update:
-        chat_id = update["message"]["chat"]["id"]
-        text = update["message"].get("text", "")
+# ===================== منطق اصلی هر ساعت =====================
 
-        if text == "/price":
-            msg = build_price_message()
-            send_telegram(chat_id, msg)
-        elif text == "/start":
-            send_telegram(chat_id, "🤖 سلام! برای دریافت قیمت و تحلیل روند بازار، دستور /price رو بفرست.")
+def check_prices_and_alert():
+    current = get_all_prices()
+    if not current:
+        print("❌ هیچ قیمتی دریافت نشد")
+        return
 
-    return "OK", 200
+    last = load_last_prices()
+
+    if not last:
+        save_prices(current)
+        lines = [f"💰 {fa_name(k)}: <b>{v:,} {fa_unit(k)}</b>" for k, v in current.items()]
+        send_telegram(
+            "🤖 <b>مانیتور بازار فعال شد!</b>\n\n" + "\n".join(lines) +
+            f"\n\n📊 هشدار نوسان بیش از {THRESHOLD}%\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        )
+    else:
+        for key, price in current.items():
+            old_price = last.get(key)
+            if not old_price:
+                continue
+            change = ((price - old_price) / old_price) * 100
+            print(f"📊 {key}: {old_price:,} → {price:,} ({change:+.2f}%)")
+            if abs(change) >= THRESHOLD:
+                emoji = "📈🔴" if change > 0 else "📉🟢"
+                direction = "رشد" if change > 0 else "ریزش"
+                send_telegram(
+                    f"{emoji} <b>هشدار نوسان {fa_name(key)}!</b>\n\n"
+                    f"💰 فعلی: <b>{price:,} {fa_unit(key)}</b>\n"
+                    f"💰 قبلی: <b>{old_price:,} {fa_unit(key)}</b>\n"
+                    f"📊 {direction}: <b>{abs(change):.2f}%</b>\n"
+                    f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                )
+        save_prices(current)
+
+    # تاریخچه برای گزارش روزانه
+    today = datetime.now().strftime("%Y-%m-%d")
+    history = load_history()
+    if today not in history:
+        history = {today: {}}
+    for key, price in current.items():
+        if key not in history[today]:
+            history[today][key] = []
+        history[today][key].append(price)
+    save_history(history)
+
+    # تاریخچه روند برای ربات /price (Render)
+    update_trend_file(current)
+
+def check_news():
+    print("\n📰 بررسی اخبار RSS...")
+    titles = get_news_from_rss()
+    print(f"تعداد اخبار مهم: {len(titles)}")
+
+    if not titles:
+        print("✅ خبر مهمی نیست")
+        return
+
+    last_sent = load_last_news()
+    already_sent = last_sent.split("|||") if last_sent else []
+
+    new_titles = [t for t in titles if t not in already_sent][:3]
+
+    if not new_titles:
+        print("✅ خبرها تکراری بودن")
+        return
+
+    lines = ["📰 <b>اخبار مهم اقتصادی:</b>\n"]
+    for t in new_titles:
+        translated = translate_title(t)
+        lines.append(f"• {translated}")
+
+    send_telegram("\n\n".join(lines))
+    save_news("|||".join(titles[:10]))
+    print(f"✅ {len(new_titles)} خبر ارسال شد")
+
+def send_daily_report():
+    today = datetime.now().strftime("%Y-%m-%d")
+    history = load_history()
+    day_data = history.get(today, {})
+
+    if not day_data:
+        print("⚠️ داده‌ای برای گزارش امروز موجود نیست")
+        return
+
+    results = {}
+    for key, prices_list in day_data.items():
+        if len(prices_list) >= 2:
+            first = prices_list[0]
+            last = prices_list[-1]
+            change = ((last - first) / first) * 100
+            results[key] = {"first": first, "last": last, "change": change}
+
+    if not results:
+        print("⚠️ داده کافی برای محاسبه تغییرات نیست")
+        return
+
+    best = max(results.items(), key=lambda x: x[1]['change'])
+    worst = min(results.items(), key=lambda x: x[1]['change'])
+
+    lines = ["📊 <b>گزارش پایان روز بازار</b>\n"]
+    for key, val in results.items():
+        emoji = "📈" if val['change'] > 0 else "📉"
+        lines.append(f"{emoji} {fa_name(key)}: {val['change']:+.2f}%  ({val['last']:,} {fa_unit(key)})")
+
+    lines.append(f"\n🏆 بیشترین رشد: <b>{fa_name(best[0])}</b> ({best[1]['change']:+.2f}%)")
+    lines.append(f"🔻 بیشترین ریزش: <b>{fa_name(worst[0])}</b> ({worst[1]['change']:+.2f}%)")
+    lines.append(f"\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    send_telegram("\n".join(lines))
+    print("✅ گزارش روزانه ارسال شد")
+
+    history = {today: day_data}
+    save_history(history)
+
+# ===================== اجرای اصلی =====================
+
+def main():
+    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    mode = os.environ.get("RUN_MODE", "hourly")
+
+    if mode == "daily_report":
+        send_daily_report()
+    else:
+        check_prices_and_alert()
+        check_news()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    main()
