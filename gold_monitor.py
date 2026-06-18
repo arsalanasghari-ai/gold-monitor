@@ -30,17 +30,37 @@ KEYWORDS = [
 
 # ===================== قیمت‌ها =====================
 
-def get_gold_price():
+def get_gold_price_and_ounce():
+    """طلای ۱۸ عیار به ریال + اونس جهانی به دلار"""
     try:
         headers = {"x-access-token": GOLDAPI_KEY}
         r = requests.get("https://www.goldapi.io/api/XAU/IRR", headers=headers, timeout=15)
         data = r.json()
         price_18k = float(data.get('price_gram_24k', 0)) * 0.75
+        ounce_usd = None
+        if 'price' in data:
+            # price اینجا اونس به ریال است؛ برای دلار باید جدا بگیریم
+            pass
         if 50_000_000 < price_18k < 600_000_000:
-            return int(price_18k)
+            gold_18k = int(price_18k)
+        else:
+            gold_18k = None
     except Exception as e:
-        print(f"خطا طلا: {e}")
-    return None
+        print(f"خطا طلا (ریال): {e}")
+        gold_18k = None
+
+    try:
+        headers = {"x-access-token": GOLDAPI_KEY}
+        r2 = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=15)
+        data2 = r2.json()
+        ounce_usd = float(data2.get('price', 0))
+        if not (500 < ounce_usd < 20000):
+            ounce_usd = None
+    except Exception as e:
+        print(f"خطا اونس (دلار): {e}")
+        ounce_usd = None
+
+    return gold_18k, ounce_usd
 
 def get_usd_to_rial():
     try:
@@ -71,9 +91,11 @@ def get_crypto_prices_usd():
 
 def get_all_prices():
     prices = {}
-    gold = get_gold_price()
-    if gold:
-        prices['gold_18k'] = gold
+    gold_18k, ounce_usd = get_gold_price_and_ounce()
+    if gold_18k:
+        prices['gold_18k'] = gold_18k
+    if ounce_usd:
+        prices['gold_ounce'] = round(ounce_usd, 2)
 
     usd_rial = get_usd_to_rial()
     btc_usd, usdt_usd = get_crypto_prices_usd()
@@ -201,12 +223,13 @@ def send_telegram(message):
 def fa_name(key):
     return {
         "gold_18k": "طلای ۱۸ عیار",
+        "gold_ounce": "اونس طلای جهانی",
         "bitcoin": "بیت‌کوین",
         "tether": "تتر",
     }.get(key, key)
 
 def fa_unit(key):
-    if key == "bitcoin":
+    if key in ("bitcoin", "gold_ounce"):
         return "دلار"
     return "ریال"
 
