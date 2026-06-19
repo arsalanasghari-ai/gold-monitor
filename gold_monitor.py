@@ -301,7 +301,23 @@ def check_prices_and_alert():
     save_history(history)
 
     # تاریخچه روند برای ربات /price (Render)
-    update_trend_file(current)
+    # آپدیت فایل تاریخچه روند برای ربات /price
+import time as _time
+now = _time.time()
+trend_data = {}
+if os.path.exists(TREND_FILE):
+    try:
+        with open(TREND_FILE, "r") as f:
+            trend_data = json.load(f)
+    except Exception:
+        trend_data = {}
+for key, price in current.items():
+    entries = trend_data.get(key, [])
+    entries.append([now, price])
+    entries = [e for e in entries if now - e[0] <= 30 * 3600]
+    trend_data[key] = entries
+with open(TREND_FILE, "w") as f:
+    json.dump(trend_data, f)
 
     # آرشیو CSV دائمی
     update_csv_archive(current)
