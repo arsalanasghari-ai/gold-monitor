@@ -10,11 +10,12 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 GOLDAPI_KEY = os.environ.get("GOLDAPI_KEY", "")
 
-PRICE_FILE = "last_prices.json"
-NEWS_FILE = "last_news.json"
+PRICE_FILE   = "last_prices.json"
+NEWS_FILE    = "last_news.json"
 HISTORY_FILE = "daily_history.json"
-TREND_FILE = "price_history.json"   # برای استفاده ربات /price روی Render
-THRESHOLD = 2.0
+TREND_FILE   = "price_history.json"
+ARCHIVE_FILE = "price_archive.csv"
+THRESHOLD    = 2.0
 
 RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -32,23 +33,17 @@ KEYWORDS = [
 # ===================== قیمت‌ها =====================
 
 def get_gold_price_and_ounce():
-    """طلای ۱۸ عیار به ریال + اونس جهانی به دلار"""
+    gold_18k = None
+    ounce_usd = None
     try:
         headers = {"x-access-token": GOLDAPI_KEY}
         r = requests.get("https://www.goldapi.io/api/XAU/IRR", headers=headers, timeout=15)
         data = r.json()
         price_18k = float(data.get('price_gram_24k', 0)) * 0.75
-        ounce_usd = None
-        if 'price' in data:
-            # price اینجا اونس به ریال است؛ برای دلار باید جدا بگیریم
-            pass
         if 50_000_000 < price_18k < 600_000_000:
             gold_18k = int(price_18k)
-        else:
-            gold_18k = None
     except Exception as e:
         print(f"خطا طلا (ریال): {e}")
-        gold_18k = None
 
     try:
         headers = {"x-access-token": GOLDAPI_KEY}
@@ -59,7 +54,6 @@ def get_gold_price_and_ounce():
             ounce_usd = None
     except Exception as e:
         print(f"خطا اونس (دلار): {e}")
-        ounce_usd = None
 
     return gold_18k, ounce_usd
 
@@ -83,8 +77,8 @@ def get_crypto_prices_usd():
         )
         data = r.json()
         print(f"CoinGecko: {data}")
-        btc = data.get('bitcoin', {}).get('usd')
-        usdt = data.get('tether', {}).get('usd')
+        btc  = data.get('bitcoin', {}).get('usd')
+        usdt = data.get('tether',  {}).get('usd')
         return btc, usdt
     except Exception as e:
         print(f"خطا CoinGecko: {e}")
@@ -94,7 +88,7 @@ def get_all_prices():
     prices = {}
     gold_18k, ounce_usd = get_gold_price_and_ounce()
     if gold_18k:
-        prices['gold_18k'] = gold_18k
+        prices['gold_18k']   = gold_18k
     if ounce_usd:
         prices['gold_ounce'] = round(ounce_usd, 2)
 
@@ -102,9 +96,9 @@ def get_all_prices():
     btc_usd, usdt_usd = get_crypto_prices_usd()
 
     if btc_usd:
-        prices['bitcoin'] = round(btc_usd, 2)  # دلار
+        prices['bitcoin'] = round(btc_usd, 2)
     if usdt_usd:
-        prices['tether'] = int(usdt_usd * usd_rial)  # ریال
+        prices['tether']  = int(usdt_usd * usd_rial)
 
     return prices
 
@@ -139,33 +133,11 @@ def load_last_news():
 
 def save_news(summary):
     with open(NEWS_FILE, "w", encoding="utf-8") as f:
-        json.dump({"last_summary": summary, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False)
+        json.dump({"last_summary": summary,
+                   "date": datetime.now().strftime("%Y-%m-%d %H:%M")},
+                  f, ensure_ascii=False)
 
-def update_csv_archive(prices):
-    """هر ساعت یک سطر به فایل آرشیو CSV اضافه می‌کند (هیچوقت پاک نمی‌شود)."""
-    filename = "price_archive.csv"
-    now = datetime.now()
-    fieldnames = ["date", "time", "gold_18k_rial", "gold_ounce_usd", "bitcoin_usd", "tether_rial"]
-    row = {
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%H:%M"),
-        "gold_18k_rial":  prices.get("gold_18k", ""),
-        "gold_ounce_usd": prices.get("gold_ounce", ""),
-        "bitcoin_usd":    prices.get("bitcoin", ""),
-        "tether_rial":    prices.get("tether", ""),
-    }
-    file_exists = os.path.exists(filename)
-    with open(filename, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
-    print(f"✅ آرشیو CSV آپدیت شد: {row}")
-    """
-    فایل price_history.json را آپدیت می‌کند: یک رکورد جدید با timestamp اضافه
-    و رکوردهای قدیمی‌تر از 30 ساعت را حذف می‌کند. این فایل توسط ربات /price
-    روی Render از طریق raw.githubusercontent.com خوانده می‌شود.
-    """
+def update_trend_file(current_prices):
     now = time.time()
     trend_data = {}
     if os.path.exists(TREND_FILE):
@@ -174,15 +146,32 @@ def update_csv_archive(prices):
                 trend_data = json.load(f)
         except Exception:
             trend_data = {}
-
     for key, price in current_prices.items():
         entries = trend_data.get(key, [])
         entries.append([now, price])
         entries = [e for e in entries if now - e[0] <= 30 * 3600]
         trend_data[key] = entries
-
     with open(TREND_FILE, "w") as f:
         json.dump(trend_data, f)
+
+def update_csv_archive(prices):
+    now = datetime.now()
+    fieldnames = ["date","time","gold_18k_rial","gold_ounce_usd","bitcoin_usd","tether_rial"]
+    row = {
+        "date":          now.strftime("%Y-%m-%d"),
+        "time":          now.strftime("%H:%M"),
+        "gold_18k_rial":  prices.get("gold_18k", ""),
+        "gold_ounce_usd": prices.get("gold_ounce", ""),
+        "bitcoin_usd":    prices.get("bitcoin", ""),
+        "tether_rial":    prices.get("tether", ""),
+    }
+    file_exists = os.path.exists(ARCHIVE_FILE)
+    with open(ARCHIVE_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+    print(f"✅ آرشیو CSV: {row}")
 
 # ===================== اخبار =====================
 
@@ -217,7 +206,6 @@ def translate_title(title):
             return translated
     except Exception as e:
         print(f"خطا MyMemory: {e}")
-
     try:
         r = requests.post(
             "https://libretranslate.com/translate",
@@ -229,7 +217,6 @@ def translate_title(title):
             return data['translatedText']
     except Exception as e:
         print(f"خطا LibreTranslate: {e}")
-
     return f"📌 {title}"
 
 # ===================== تلگرام =====================
@@ -242,10 +229,10 @@ def send_telegram(message):
 
 def fa_name(key):
     return {
-        "gold_18k": "طلای ۱۸ عیار",
+        "gold_18k":   "طلای ۱۸ عیار",
         "gold_ounce": "اونس طلای جهانی",
-        "bitcoin": "بیت‌کوین",
-        "tether": "تتر",
+        "bitcoin":    "بیت‌کوین",
+        "tether":     "تتر",
     }.get(key, key)
 
 def fa_unit(key):
@@ -253,7 +240,7 @@ def fa_unit(key):
         return "دلار"
     return "ریال"
 
-# ===================== منطق اصلی هر ساعت =====================
+# ===================== بررسی قیمت و هشدار =====================
 
 def check_prices_and_alert():
     current = get_all_prices()
@@ -268,7 +255,8 @@ def check_prices_and_alert():
         lines = [f"💰 {fa_name(k)}: <b>{v:,} {fa_unit(k)}</b>" for k, v in current.items()]
         send_telegram(
             "🤖 <b>مانیتور بازار فعال شد!</b>\n\n" + "\n".join(lines) +
-            f"\n\n📊 هشدار نوسان بیش از {THRESHOLD}%\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            f"\n\n📊 هشدار نوسان بیش از {THRESHOLD}%\n"
+            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         )
     else:
         for key, price in current.items():
@@ -278,7 +266,7 @@ def check_prices_and_alert():
             change = ((price - old_price) / old_price) * 100
             print(f"📊 {key}: {old_price:,} → {price:,} ({change:+.2f}%)")
             if abs(change) >= THRESHOLD:
-                emoji = "📈🔴" if change > 0 else "📉🟢"
+                emoji     = "📈🔴" if change > 0 else "📉🟢"
                 direction = "رشد" if change > 0 else "ریزش"
                 send_telegram(
                     f"{emoji} <b>هشدار نوسان {fa_name(key)}!</b>\n\n"
@@ -289,8 +277,8 @@ def check_prices_and_alert():
                 )
         save_prices(current)
 
-    # تاریخچه برای گزارش روزانه
-    today = datetime.now().strftime("%Y-%m-%d")
+    # تاریخچه روزانه
+    today   = datetime.now().strftime("%Y-%m-%d")
     history = load_history()
     if today not in history:
         history = {today: {}}
@@ -300,27 +288,13 @@ def check_prices_and_alert():
         history[today][key].append(price)
     save_history(history)
 
-    # تاریخچه روند برای ربات /price (Render)
-    # آپدیت فایل تاریخچه روند برای ربات /price
-import time as _time
-now = _time.time()
-trend_data = {}
-if os.path.exists(TREND_FILE):
-    try:
-        with open(TREND_FILE, "r") as f:
-            trend_data = json.load(f)
-    except Exception:
-        trend_data = {}
-for key, price in current.items():
-    entries = trend_data.get(key, [])
-    entries.append([now, price])
-    entries = [e for e in entries if now - e[0] <= 30 * 3600]
-    trend_data[key] = entries
-with open(TREND_FILE, "w") as f:
-    json.dump(trend_data, f)
+    # تاریخچه روند (برای ربات /price روی Render)
+    update_trend_file(current)
 
     # آرشیو CSV دائمی
     update_csv_archive(current)
+
+# ===================== اخبار =====================
 
 def check_news():
     print("\n📰 بررسی اخبار RSS...")
@@ -331,10 +305,9 @@ def check_news():
         print("✅ خبر مهمی نیست")
         return
 
-    last_sent = load_last_news()
+    last_sent  = load_last_news()
     already_sent = last_sent.split("|||") if last_sent else []
-
-    new_titles = [t for t in titles if t not in already_sent][:3]
+    new_titles   = [t for t in titles if t not in already_sent][:3]
 
     if not new_titles:
         print("✅ خبرها تکراری بودن")
@@ -342,16 +315,17 @@ def check_news():
 
     lines = ["📰 <b>اخبار مهم اقتصادی:</b>\n"]
     for t in new_titles:
-        translated = translate_title(t)
-        lines.append(f"• {translated}")
+        lines.append(f"• {translate_title(t)}")
 
     send_telegram("\n\n".join(lines))
     save_news("|||".join(titles[:10]))
     print(f"✅ {len(new_titles)} خبر ارسال شد")
 
+# ===================== گزارش روزانه تلگرام =====================
+
 def send_daily_report():
-    today = datetime.now().strftime("%Y-%m-%d")
-    history = load_history()
+    today    = datetime.now().strftime("%Y-%m-%d")
+    history  = load_history()
     day_data = history.get(today, {})
 
     if not day_data:
@@ -361,8 +335,8 @@ def send_daily_report():
     results = {}
     for key, prices_list in day_data.items():
         if len(prices_list) >= 2:
-            first = prices_list[0]
-            last = prices_list[-1]
+            first  = prices_list[0]
+            last   = prices_list[-1]
             change = ((last - first) / first) * 100
             results[key] = {"first": first, "last": last, "change": change}
 
@@ -370,7 +344,7 @@ def send_daily_report():
         print("⚠️ داده کافی برای محاسبه تغییرات نیست")
         return
 
-    best = max(results.items(), key=lambda x: x[1]['change'])
+    best  = max(results.items(), key=lambda x: x[1]['change'])
     worst = min(results.items(), key=lambda x: x[1]['change'])
 
     lines = ["📊 <b>گزارش پایان روز بازار</b>\n"]
