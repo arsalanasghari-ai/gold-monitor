@@ -89,8 +89,6 @@ jobs:
         run: |
           git config --global user.name "gold-monitor-bot"
           git config --global user.email "actions@github.com"
-          git add -f price_archive.csv last_prices.json daily_history.json \
-                     last_news.json price_history.json \
-                     market_report_*.xlsx 2>/dev/null || true
+          git add -A
           git diff --quiet --cached || git commit -m "chore: update market data [skip ci]"
           git push
