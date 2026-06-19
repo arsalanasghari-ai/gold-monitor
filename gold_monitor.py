@@ -1,6 +1,7 @@
 import requests
 import json
 import os
+import csv
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -140,7 +141,26 @@ def save_news(summary):
     with open(NEWS_FILE, "w", encoding="utf-8") as f:
         json.dump({"last_summary": summary, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}, f, ensure_ascii=False)
 
-def update_trend_file(current_prices):
+def update_csv_archive(prices):
+    """هر ساعت یک سطر به فایل آرشیو CSV اضافه می‌کند (هیچوقت پاک نمی‌شود)."""
+    filename = "price_archive.csv"
+    now = datetime.now()
+    fieldnames = ["date", "time", "gold_18k_rial", "gold_ounce_usd", "bitcoin_usd", "tether_rial"]
+    row = {
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M"),
+        "gold_18k_rial":  prices.get("gold_18k", ""),
+        "gold_ounce_usd": prices.get("gold_ounce", ""),
+        "bitcoin_usd":    prices.get("bitcoin", ""),
+        "tether_rial":    prices.get("tether", ""),
+    }
+    file_exists = os.path.exists(filename)
+    with open(filename, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+    print(f"✅ آرشیو CSV آپدیت شد: {row}")
     """
     فایل price_history.json را آپدیت می‌کند: یک رکورد جدید با timestamp اضافه
     و رکوردهای قدیمی‌تر از 30 ساعت را حذف می‌کند. این فایل توسط ربات /price
@@ -282,6 +302,9 @@ def check_prices_and_alert():
 
     # تاریخچه روند برای ربات /price (Render)
     update_trend_file(current)
+
+    # آرشیو CSV دائمی
+    update_csv_archive(current)
 
 def check_news():
     print("\n📰 بررسی اخبار RSS...")
