@@ -39,16 +39,20 @@ def get_gold_price_and_ounce():
         headers = {"x-access-token": GOLDAPI_KEY}
         r = requests.get("https://www.goldapi.io/api/XAU/IRR", headers=headers, timeout=15)
         data = r.json()
+        print(f"GoldAPI IRR: {data.get('price_gram_24k')} | status: {r.status_code}")
         price_18k = float(data.get('price_gram_24k', 0)) * 0.75
         if 50_000_000 < price_18k < 600_000_000:
             gold_18k = int(price_18k)
     except Exception as e:
         print(f"خطا طلا (ریال): {e}")
 
+    time.sleep(2)  # فاصله بین دو call برای جلوگیری از rate limit
+
     try:
         headers = {"x-access-token": GOLDAPI_KEY}
         r2 = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=15)
         data2 = r2.json()
+        print(f"GoldAPI USD: {data2.get('price')} | status: {r2.status_code}")
         ounce_usd = float(data2.get('price', 0))
         if not (500 < ounce_usd < 20000):
             ounce_usd = None
@@ -158,8 +162,8 @@ def update_csv_archive(prices):
     now = datetime.now()
     fieldnames = ["date","time","gold_18k_rial","gold_ounce_usd","bitcoin_usd","tether_rial"]
     row = {
-        "date":          now.strftime("%Y-%m-%d"),
-        "time":          now.strftime("%H:%M"),
+        "date":           now.strftime("%Y-%m-%d"),
+        "time":           now.strftime("%H:%M"),
         "gold_18k_rial":  prices.get("gold_18k", ""),
         "gold_ounce_usd": prices.get("gold_ounce", ""),
         "bitcoin_usd":    prices.get("bitcoin", ""),
@@ -167,7 +171,7 @@ def update_csv_archive(prices):
     }
     file_exists = os.path.exists(ARCHIVE_FILE)
     with open(ARCHIVE_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=",")
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
