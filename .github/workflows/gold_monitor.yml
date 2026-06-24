@@ -1,5 +1,4 @@
 name: Gold Price Monitor
-
 on:
   schedule:
     - cron: '0 * * * *'       # هر ساعت: بررسی قیمت + اخبار
@@ -13,26 +12,20 @@ on:
         description: 'نوع گزارش اکسل (weekly/monthly/yearly)'
         required: false
         default: ''
-
 permissions:
   contents: write
-
 jobs:
   check-gold:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install requests openpyxl
-
       - name: Determine run mode
         id: mode
         run: |
@@ -42,49 +35,41 @@ jobs:
           DOM=$(date -u +%d)   # روز ماه
           MONTH=$(date -u +%m)
           DAYS_IN_MONTH=$(date -d "$(date -u +%Y-%m-01) +1 month -1 day" +%d)
-
           MANUAL_TYPE="${{ github.event.inputs.report_type }}"
-
           if [ -n "$MANUAL_TYPE" ]; then
             echo "mode=excel" >> $GITHUB_OUTPUT
             echo "report_type=$MANUAL_TYPE" >> $GITHUB_OUTPUT
-
           elif [ "$HOUR" = "18" ] && [ "$DOM" = "$DAYS_IN_MONTH" ] && [ "$MONTH" = "12" ]; then
             echo "mode=excel" >> $GITHUB_OUTPUT
             echo "report_type=yearly" >> $GITHUB_OUTPUT
-
           elif [ "$HOUR" = "18" ] && [ "$DOM" = "$DAYS_IN_MONTH" ]; then
             echo "mode=excel" >> $GITHUB_OUTPUT
             echo "report_type=monthly" >> $GITHUB_OUTPUT
-
           elif [ "$HOUR" = "17" ] && [ "$DOW" = "5" ]; then
             echo "mode=excel" >> $GITHUB_OUTPUT
             echo "report_type=weekly" >> $GITHUB_OUTPUT
-
           elif [ "$HOUR" = "16" ] && [ "$MIN" = "30" ]; then
             echo "mode=daily_report" >> $GITHUB_OUTPUT
             echo "report_type=" >> $GITHUB_OUTPUT
-
           else
             echo "mode=hourly" >> $GITHUB_OUTPUT
             echo "report_type=" >> $GITHUB_OUTPUT
           fi
-
       - name: Run gold monitor (hourly / daily report)
         if: steps.mode.outputs.mode != 'excel'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           GOLDAPI_KEY: ${{ secrets.GOLDAPI_KEY }}
+          METAL_PRICE_API_KEY: ${{ secrets.METAL_PRICE_API_KEY }}
+          COMMODITIES_API_KEY: ${{ secrets.COMMODITIES_API_KEY }}
           RUN_MODE: ${{ steps.mode.outputs.mode }}
         run: python gold_monitor.py
-
       - name: Generate Excel report
         if: steps.mode.outputs.mode == 'excel'
         env:
           REPORT_TYPE: ${{ steps.mode.outputs.report_type }}
         run: python generate_report.py
-
       - name: Commit and push all data files
         run: |
           git config --global user.name "gold-monitor-bot"
