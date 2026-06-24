@@ -7,8 +7,10 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-CHAT_ID = os.environ.get("CHAT_ID", "")
-GOLDAPI_KEY = os.environ.get("GOLDAPI_KEY", "")
+CHAT_ID        = os.environ.get("CHAT_ID", "")
+GOLDAPI_KEY    = os.environ.get("GOLDAPI_KEY", "")          # اگر کلید جدید گرفتی
+METAL_PRICE_API_KEY  = os.environ.get("METAL_PRICE_API_KEY", "")   # اختیاری
+COMMODITIES_API_KEY  = os.environ.get("COMMODITIES_API_KEY", "")   # اختیاری
 
 PRICE_FILE   = "last_prices.json"
 NEWS_FILE    = "last_news.json"
@@ -16,6 +18,9 @@ HISTORY_FILE = "daily_history.json"
 TREND_FILE   = "price_history.json"
 ARCHIVE_FILE = "price_archive.csv"
 THRESHOLD    = 2.0
+
+TROY_OUNCE_TO_GRAM = 31.1035
+KARAT_18_FACTOR    = 0.75
 
 RSS_FEEDS = [
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -30,36 +35,7 @@ KEYWORDS = [
     "bank", "debt", "bond", "yield"
 ]
 
-# ===================== قیمت‌ها =====================
-
-def get_gold_price_and_ounce():
-    gold_18k = None
-    ounce_usd = None
-    try:
-        headers = {"x-access-token": GOLDAPI_KEY}
-        r = requests.get("https://www.goldapi.io/api/XAU/IRR", headers=headers, timeout=15)
-        data = r.json()
-        print(f"GoldAPI IRR: {data.get('price_gram_24k')} | status: {r.status_code}")
-        price_18k = float(data.get('price_gram_24k', 0)) * 0.75
-        if 50_000_000 < price_18k < 600_000_000:
-            gold_18k = int(price_18k)
-    except Exception as e:
-        print(f"خطا طلا (ریال): {e}")
-
-    time.sleep(2)  # فاصله بین دو call برای جلوگیری از rate limit
-
-    try:
-        headers = {"x-access-token": GOLDAPI_KEY}
-        r2 = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=15)
-        data2 = r2.json()
-        print(f"GoldAPI USD: {data2.get('price')} | status: {r2.status_code}")
-        ounce_usd = float(data2.get('price', 0))
-        if not (500 < ounce_usd < 20000):
-            ounce_usd = None
-    except Exception as e:
-        print(f"خطا اونس (دلار): {e}")
-
-    return gold_18k, ounce_usd
+# ===================== دریافت نرخ دلار =====================
 
 def get_usd_to_rial():
     try:
@@ -67,10 +43,148 @@ def get_usd_to_rial():
         data = r.json()
         rate = data['rates'].get('IRR', 0)
         if rate > 100000:
-            return rate
+            print(f"[USD/IRR] {rate:,.0f} ریال")
+            return float(rate)
     except Exception as e:
-        print(f"خطا نرخ دلار: {e}")
-    return 1_100_000
+        print(f"خطا نرخ دلار (er-api): {e}")
+
+    # Fallback
+    try:
+        r = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=15)
+        data = r.json()
+        rate = data['rates'].get('IRR', 0)
+        if rate > 100000:
+            print(f"[USD/IRR fallback] {rate:,.0f} ریال")
+            return float(rate)
+    except Exception as e:
+        print(f"خطا نرخ دلار (fallback): {e}")
+
+    return 1_100_000   # مقدار پیش‌فرض اضطراری
+
+# ===================== دریافت اونس طلا — چند منبع =====================
+
+def _get_xau_from_metals_live():
+    """منبع ۱: metals.live — بدون کلید"""
+    try:
+        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            price = (data[0].get("price") or data[0].get("gold")) if isinstance(data, list) \
+                    else (data.get("price") or data.get("gold"))
+            if price and 500 < float(price) < 20000:
+                print(f"[metals.live] اونس: ${float(price):,.2f}")
+                return float(price)
+    except Exception as e:
+        print(f"[metals.live] خطا: {e}")
+    return None
+
+def _get_xau_from_metalpriceapi():
+    """منبع ۲: metalpriceapi.com — کلید رایگان اختیاری"""
+    if not METAL_PRICE_API_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"https://api.metalpriceapi.com/v1/latest"
+            f"?api_key={METAL_PRICE_API_KEY}&base=XAU&currencies=USD",
+            timeout=10
+        )
+        if r.status_code == 200:
+            price = float(r.json()["rates"]["USD"])
+            if 500 < price < 20000:
+                print(f"[metalpriceapi] اونس: ${price:,.2f}")
+                return price
+    except Exception as e:
+        print(f"[metalpriceapi] خطا: {e}")
+    return None
+
+def _get_xau_from_commodities():
+    """منبع ۳: commodities-api.com — کلید رایگان اختیاری"""
+    if not COMMODITIES_API_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"https://commodities-api.com/api/latest"
+            f"?access_key={COMMODITIES_API_KEY}&base=USD&symbols=XAU",
+            timeout=10
+        )
+        if r.status_code == 200:
+            xau_per_usd = r.json()["data"]["rates"].get("XAU")
+            if xau_per_usd:
+                price = 1.0 / float(xau_per_usd)
+                if 500 < price < 20000:
+                    print(f"[commodities-api] اونس: ${price:,.2f}")
+                    return price
+    except Exception as e:
+        print(f"[commodities-api] خطا: {e}")
+    return None
+
+def _get_xau_from_goldapi():
+    """منبع ۴: goldapi.io — اگر کلید جدید داری"""
+    if not GOLDAPI_KEY:
+        return None
+    try:
+        headers = {"x-access-token": GOLDAPI_KEY, "Content-Type": "application/json"}
+        r = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=15)
+        if r.status_code == 200:
+            price = float(r.json().get("price", 0))
+            if 500 < price < 20000:
+                print(f"[goldapi.io] اونس: ${price:,.2f}")
+                return price
+        else:
+            print(f"[goldapi.io] خطای {r.status_code}")
+    except Exception as e:
+        print(f"[goldapi.io] خطا: {e}")
+    return None
+
+def _get_xau_from_coingecko():
+    """منبع ۵: CoinGecko PAXG — بدون کلید، آخرین راه"""
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price"
+            "?ids=pax-gold&vs_currencies=usd",
+            timeout=10
+        )
+        if r.status_code == 200:
+            price = r.json().get("pax-gold", {}).get("usd")
+            if price and 500 < float(price) < 20000:
+                print(f"[CoinGecko/PAXG] اونس (تقریبی): ${float(price):,.2f}")
+                return float(price)
+    except Exception as e:
+        print(f"[CoinGecko/PAXG] خطا: {e}")
+    return None
+
+def get_gold_price_and_ounce():
+    """
+    قیمت اونس XAU/USD را از چند منبع رایگان دریافت می‌کند،
+    سپس طلای ۱۸ عیار به ریال را محاسبه می‌کند.
+    خروجی: (gold_18k_rial, ounce_usd)
+    """
+    xau_usd = (
+        _get_xau_from_metals_live()      or
+        _get_xau_from_metalpriceapi()    or
+        _get_xau_from_commodities()      or
+        _get_xau_from_goldapi()          or
+        _get_xau_from_coingecko()
+    )
+
+    if not xau_usd:
+        print("❌ هیچ منبعی برای اونس طلا کار نکرد")
+        return None, None
+
+    usd_rial = get_usd_to_rial()
+    gold_18k = int((xau_usd / TROY_OUNCE_TO_GRAM) * KARAT_18_FACTOR * usd_rial)
+
+    # اعتبارسنجی بازه منطقی
+    if not (50_000_000 < gold_18k < 600_000_000):
+        print(f"⚠️ قیمت محاسبه‌شده خارج از بازه: {gold_18k:,} ریال")
+        gold_18k = None
+
+    if gold_18k:
+        print(f"✅ طلای ۱۸ عیار: {gold_18k:,} ریال  |  اونس: ${xau_usd:,.2f}")
+
+    return gold_18k, round(xau_usd, 2)
+
+# ===================== کریپتو =====================
 
 def get_crypto_prices_usd():
     try:
@@ -281,7 +395,6 @@ def check_prices_and_alert():
                 )
         save_prices(current)
 
-    # تاریخچه روزانه
     today   = datetime.now().strftime("%Y-%m-%d")
     history = load_history()
     if today not in history:
@@ -292,10 +405,7 @@ def check_prices_and_alert():
         history[today][key].append(price)
     save_history(history)
 
-    # تاریخچه روند (برای ربات /price روی Render)
     update_trend_file(current)
-
-    # آرشیو CSV دائمی
     update_csv_archive(current)
 
 # ===================== اخبار =====================
@@ -309,7 +419,7 @@ def check_news():
         print("✅ خبر مهمی نیست")
         return
 
-    last_sent  = load_last_news()
+    last_sent    = load_last_news()
     already_sent = last_sent.split("|||") if last_sent else []
     new_titles   = [t for t in titles if t not in already_sent][:3]
 
